@@ -1,0 +1,268 @@
+// pubsub_another_example.cpp : Defines the entry point for the console application.
+//
+#pragma warning (disable : 4996)
+#include "stdafx.h"
+#include <iostream>
+#include <sstream>
+#include <map>
+
+/*
+ * main.cpp
+ *
+ *  Created on: Apr 19, 2013
+ *      Author: Enoah Netzach
+ *
+ *  Description: manages multiple interfaces in separated, single threads.
+ *
+ *  Usage:
+ *   1) in Interface_base create your own signaling fields
+ *        > (private) boost::signals2::signal< R(T, ...) > m_functSignal
+ *        > (private) std::list< boost::signals2::connection > m_functConnections
+ *      and methods
+ *        > (public) R funct(T, ...)
+ *          calling R functImpl(T, ...)
+ *        > (protected) void callFunct(T, ...) { m_functSignal(T, ...); }
+ *        > (protected) virtual R functImpl(T, ...) = 0;
+ *        > (private) boost::signals2::connection connectFunct(const boost::signals2::signal< R(T, ...) > & slot)
+ *          returning m_functSignal.connect(slot);
+ *   2) for each signal function add in void Interface_base::connect(sharedInterface interface)
+ *      m_functConnections.push_back(interface->connectFunct(boost::bind(& Interface_base::funct, this, ...)));
+ *      using boost::bind placeholders for funct arguments (_1, _2, ...)
+ *   3) for each signal function add in virtual Interface_base::~Interface_base() BEFORE stop();
+ *      BOOST_FOREACH(boost::signals2::connection conn, m_functConnections){ conn.disconnect(); };
+ *   4) create a new class, inherit from Interface_base (public virtual), implementing
+ *        > (protected/private) void runImpl()
+ *          the run loop which will be executed in a separated thread, feel free to use Interface_base::m_runMutex
+ *          here and to add some boost::this_thread::interrupt_point() when needed
+ *        > (protected/private) R functImpl()
+ *   5) in the interface manager use a container for the sharedInterfaces and just call (in order)
+ *        > BOOST_FOREACH(sharedInterface interfaceSig, interfaces)
+ *             BOOST_FOREACH(sharedInterface interfaceSlot, interfaces)
+ *                interfaceSig->connect(interfaceSlot);
+ *        > BOOST_FOREACH(sharedInterface interface, interfaces) interface->run();
+ *   6) wait for completion with
+ *        > BOOST_FOREACH(sharedInterface interface, interfaces) interface->join();
+ *      or interrupt all the interfaces with
+ *        > BOOST_FOREACH(sharedInterface interface, interfaces) interface->interrupt();
+ *      or just stop them with
+ *        > BOOST_FOREACH(sharedInterface interface, interfaces) interface->stop();
+ */
+
+#include <iostream>
+#include <list>
+#include <string>
+
+#include <boost/bind.hpp>
+#include <boost/foreach.hpp>
+#include <boost/signals2.hpp>
+#include <boost/smart_ptr.hpp>
+#include <boost/thread.hpp>
+#include <boost/utility.hpp>
+
+/*
+ * libs: boost_system boost_thread
+ */
+
+class Interface_base;
+typedef boost::shared_ptr< Interface_base > sharedInterface;
+
+class Interface_base : boost::noncopyable
+{
+public:
+// typedef boost::signals2::signal< R(T, ...) >  functSignal_type;
+
+   void run() { m_runThread = boost::thread(& Interface_base::runImpl, this); }
+   void stop() { interrupt(); join(); }
+   void interrupt() { m_runThread.interrupt(); }
+   void join() { m_runThread.join(); }
+   void connect(sharedInterface interface)
+   {
+//    m_functConnections.push_back(interface->connectfunct(boost::bind(& Interface_base::funct, this, _1, ...)));
+   }
+// R funct(T, ...);
+
+protected:
+   Interface_base(const char * name) : m_name(name) {}
+   virtual ~Interface_base()
+    {
+//    BOOST_FOREACH(boost::signals2::connection conn, m_functConnections){ conn.disconnect(); };
+      stop();
+    }
+
+   virtual void runImpl() = 0;
+
+   /*
+    * TODO: implement boost::future
+    * http://www.boost.org/doc/libs/1_53_0/doc/html/thread/synchronization.html#thread.synchronization.futures
+    */
+// void callFunct(T, ...) { m_functSignal(T, ...); }
+// virtual R functImpl(T, ...) = 0;
+
+   boost::mutex m_runMutex;
+
+private:
+// boost::signals2::connection connectFunct(const functSignal_type::slot_type & slot) { return m_functSignal.connect(slot); }
+
+   const std::string m_name;
+   boost::thread m_runThread;
+// funct_type m_functSignal;
+// std::list< boost::signals2::connection > m_functConnections;
+};
+
+class Derived : public virtual Interface_base
+{
+public:
+   Derived() : Interface_base("Derived") {}
+
+protected:
+   void runImpl() {}
+
+// R functImpl(T, ...) {}
+};
+
+int thisIsNotCalledMainBecauseOfTheFollowingExample()
+{
+   std::list< sharedInterface > interfaces;
+
+   interfaces.push_back(sharedInterface(new Derived));
+
+   BOOST_FOREACH(sharedInterface interfaceSig, interfaces)
+      BOOST_FOREACH(sharedInterface interfaceSlot, interfaces)
+         interfaceSig->connect(interfaceSlot);
+   BOOST_FOREACH(sharedInterface interface, interfaces) interface->run();
+
+   BOOST_FOREACH(sharedInterface interface, interfaces) interface->join();
+
+   return 0;
+}
+
+/*
+ * EXAMPLE
+ */
+
+class Interface_base_example;
+typedef boost::shared_ptr< Interface_base_example > sharedInterface_example;
+
+class Interface_base_example : boost::noncopyable
+{
+public:
+   typedef boost::signals2::signal< void(const char *) >  showSignal_type;
+
+   void run() { m_runThread = boost::thread(& Interface_base_example::runImpl, this); }
+   void stop() { interrupt(); join(); }
+   void interrupt() { m_runThread.interrupt(); }
+   void join() { m_runThread.join(); }
+   void connect(sharedInterface_example interface)
+   {
+      m_showMapConnections.push_back(interface->connectShowMap(boost::bind(& Interface_base_example::showMap, this, _1)));
+      m_showUnitsConnections.push_back(interface->connectShowUnits(boost::bind(& Interface_base_example::showUnits, this, _1)));
+   }
+   void showMap(const char * msg) const { std::cout << "[" << m_name << "] Map "; showMapImpl(msg); std::cout.flush(); }
+   void showUnits(const char * msg) const { std::cout << "[" << m_name << "] Units "; showUnitsImpl(msg); std::cout.flush(); }
+
+protected:
+   Interface_base_example(const char * name) : m_name(name) {}
+   virtual ~Interface_base_example()
+    {
+      BOOST_FOREACH(boost::signals2::connection conn, m_showMapConnections){ conn.disconnect(); };
+      BOOST_FOREACH(boost::signals2::connection conn, m_showUnitsConnections){ conn.disconnect(); };
+      stop();
+    }
+
+   virtual void runImpl() = 0;
+
+   void callShowMap(const char * msg) { m_showMapSignal(msg); }
+   virtual void showMapImpl(const char *) const = 0;
+   void callShowUnits(const char * msg) { m_showUnitsSignal(msg); }
+   virtual void showUnitsImpl(const char *) const = 0;
+
+   boost::mutex m_runMutex;
+
+private:
+   boost::signals2::connection connectShowMap(const showSignal_type::slot_type & slot) { return m_showMapSignal.connect(slot); }
+   boost::signals2::connection connectShowUnits(const showSignal_type::slot_type & slot) { return m_showUnitsSignal.connect(slot); }
+
+   const std::string m_name;
+   boost::thread m_runThread;
+   showSignal_type m_showMapSignal;
+   std::list< boost::signals2::connection > m_showMapConnections;
+   showSignal_type m_showUnitsSignal;
+   std::list< boost::signals2::connection > m_showUnitsConnections;
+};
+
+//---------------------
+class TerminalInterface : public virtual Interface_base_example
+{
+public:
+   TerminalInterface() : Interface_base_example("Terminal") {}
+
+private:
+   void runImpl()
+   {
+      std::string input = "";
+
+      do
+      {
+         input.clear();
+         std::cout << "What would you like to do? (_s_how, _q_uit) " << std::flush;
+         std::cin >> input;
+
+         if (input == "s")
+         {
+            input.clear();
+            std::cout << "What would you like to show? (_m_ap, _u_nits) " << std::flush;
+            std::cin >> input;
+
+            if (input == "m") callShowMap("signal...");
+            if (input == "u") callShowUnits("signal...");
+         }
+      } while (input != "q");
+   }
+
+   void showMapImpl(const char * msg) const
+      { std::cout << "\"" << msg << "\"" << std::endl; }
+   void showUnitsImpl(const char * msg) const
+      { std::cout << "\"" << msg << "\"" << std::endl; }
+};
+
+//-------------------
+class OpenGLInterface : public virtual Interface_base_example // dummy interface
+{
+public:
+   OpenGLInterface() : Interface_base_example("OpenGL") {}
+
+protected:
+   void runImpl() {}
+
+   void showMapImpl(const char * msg) const
+      { std::cout << "\"" << msg << "\"" << std::endl; }
+   void showUnitsImpl(const char * msg) const
+      { std::cout << "\"" << msg << "\"" << std::endl; }
+
+private:
+};
+
+int main()
+{
+   std::list< sharedInterface_example > interfaces;
+
+   interfaces.push_back(sharedInterface_example(new TerminalInterface));
+   interfaces.push_back(sharedInterface_example(new OpenGLInterface));
+
+   BOOST_FOREACH(sharedInterface_example interfaceSig, interfaces)
+      BOOST_FOREACH(sharedInterface_example interfaceSlot, interfaces)
+         interfaceSig->connect(interfaceSlot);
+
+   BOOST_FOREACH(sharedInterface_example interface, interfaces)
+   {
+      interface->showMap("sample");
+      interface->showUnits("sample");
+   }
+
+   BOOST_FOREACH(sharedInterface_example interface, interfaces) interface->run();
+
+   BOOST_FOREACH(sharedInterface_example interface, interfaces) interface->join();
+
+	return 0;
+}
+
